@@ -191,7 +191,12 @@ wait_ssh() {
 		sleep 5
 	done
 	# Wait until cloud-init is complete. Then the package manager is free.
-	vm_ssh 'command -v cloud-init >/dev/null && cloud-init status --wait >/dev/null 2>&1 || true'
+	# cloud-init can restart sshd during this time (for example for ssh_pwauth). Then the
+	# connection fails with "Connection reset by peer". Try again until the time limit.
+	until vm_ssh 'command -v cloud-init >/dev/null && cloud-init status --wait >/dev/null 2>&1 || true' 2>/dev/null; do
+		[ $((SECONDS - start)) -lt "$VM_TIMEOUT" ] || die "No ssh connection to the VM after $VM_TIMEOUT seconds"
+		sleep 5
+	done
 	log "VM is ready ($((SECONDS - start)) s): $(vm_ssh 'uname -r')"
 }
 
