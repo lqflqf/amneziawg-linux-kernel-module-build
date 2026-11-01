@@ -21,10 +21,12 @@ for dir in "$site"/alpine/v*/main/*/; do
 	arch="$(basename "$dir")"
 	release="$(basename "$(dirname "$(dirname "$dir")")")"
 	rm -f "$dir/APKINDEX.tar.gz"
+	# --no-warnings: the dependencies (linux-virt, linux-lts, /bin/sh) are in the Alpine
+	# repositories, not in this repository. Thus apk index cannot find them.
 	set -- "$dir"/*.apk
 	[ -e "$1" ] || die "$dir has no packages"
 	log "Index $release/$arch: $(cd "$dir" && echo *.apk)"
-	(cd "$dir" && apk index --quiet --allow-untrusted --rewrite-arch "$arch" \
+	(cd "$dir" && apk index --quiet --no-warnings --allow-untrusted --rewrite-arch "$arch" \
 		--description "$REPO_ORIGIN $release main" -o APKINDEX.tar.gz -- *.apk)
 	abuild-sign -q -k "$HOME/.abuild/$APK_KEY_NAME" "$dir/APKINDEX.tar.gz"
 	found=1

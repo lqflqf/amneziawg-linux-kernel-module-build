@@ -12,6 +12,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # "git init" in actions/checkout prints a hint about the default branch name. Checkout uses
+  # a temporary HOME, thus set the git configuration with environment variables.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
 concurrency:
   group: track-updates
 
@@ -24,7 +31,7 @@ jobs:
       BRANCH: automation/update-versions
     steps:
       # UPDATE_PR_TOKEN is necessary. A pull request from GITHUB_TOKEN does not start the build workflow.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.UPDATE_PR_TOKEN }}
 
@@ -59,7 +66,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Find keys that expire in fewer than 90 days
         id: expiry
         run: scripts/check-key-expiry.sh 90

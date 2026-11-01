@@ -23,6 +23,9 @@ locked="$(jq -r --arg s "$suite" --arg a "$arch" \
 [ -n "$locked" ] && [ "$locked" != null ] || die "No Debian target $suite/$arch in versions/targets.json"
 
 export DEBIAN_FRONTEND=noninteractive
+# The headers package can pull in a kernel image. The container does not boot it, thus do not
+# make an initramfs for it.
+export INITRD=No
 apt-get update -q --error-on=any
 log "Install linux-headers-$arch $locked (versions/targets.json)"
 # Use the locked version. If Debian replaced it, this step fails. Then run the track-updates workflow.
