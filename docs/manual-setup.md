@@ -112,7 +112,9 @@ you keep offline. Steps 6 and 7 write the encrypted backups of the private keys 
 Step 7 deletes the work directory. Thus do not use a directory in `$WORK` for the backups.
 
 ```sh
-export BUILD_REPO="$PWD"
+# Run this step in the clone of the build repository. The commands stop if you are not in it.
+export BUILD_REPO="$(git rev-parse --show-toplevel)" && test -f "$BUILD_REPO/config.env" &&
+  echo "Build repository: $BUILD_REPO"
 export BACKUP_DIR=/path/to/offline/backup   # Change this path.
 mkdir -p "$BACKUP_DIR"
 umask 077
