@@ -1,8 +1,11 @@
 name: Build, test, and publish
 
-# Pull request: build and test all targets with temporary test keys.
-# Push to main: build and test. If the release inputs are different from the published release
-#   inputs (build-info.txt in the package repository), sign with the release keys and publish.
+# Pull request: build and test all targets with temporary test keys. If the pull request changes
+#   only files that do not change the packages or the tests (scripts/plan-ci.py), only "lint" runs.
+# Push to main: if the release inputs are different from the published release inputs
+#   (build-info.txt in the package repository), build, test, sign with the release keys, and
+#   publish. If not, build and test only if the pushed commits change the packages or the tests
+#   (scripts/plan-ci.py). If not, only "lint" runs.
 # Manual run: build and test. Set "publish" to publish from main.
 #
 # Security: the jobs that run upstream build code (build-apk, build-deb, dkms-check) get no
@@ -49,10 +52,14 @@ jobs:
     outputs:
       publish: ${{ steps.decide.outputs.publish }}
       environment: ${{ steps.decide.outputs.environment }}
+      build: ${{ steps.plan.outputs.build }}
       alpine: ${{ steps.matrix.outputs.alpine }}
       debian: ${{ steps.matrix.outputs.debian }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # For a pull request, HEAD is the merge commit. HEAD^1 is the base branch.
+          fetch-depth: 2
 
       - name: Decide if this run publishes
         id: decide
@@ -91,6 +98,39 @@ jobs:
           echo "environment=$env" >>"$GITHUB_OUTPUT"
           echo "Publish: $publish (environment $env)" >>"$GITHUB_STEP_SUMMARY"
 
+      - name: Decide if this run builds and tests
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          PUBLISH: ${{ steps.decide.outputs.publish }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+          pull_request)
+            if git rev-parse -q --verify HEAD^2 >/dev/null; then
+              scripts/plan-ci.py HEAD^1
+            else
+              echo "HEAD is not a merge commit. Build and test."
+              echo "build=true" >>"$GITHUB_OUTPUT"
+            fi
+            ;;
+          push)
+            # Build to publish. Also build if the pushed commits change the packages or the
+            # tests: the branch rules do not make sure that the pull request tested this tree.
+            if [ "$PUBLISH" = true ]; then
+              echo "build=true" >>"$GITHUB_OUTPUT"
+            elif git fetch -q --depth 1 origin "$BEFORE" 2>/dev/null; then
+              scripts/plan-ci.py "$BEFORE"
+            else
+              echo "Cannot get the commit before the push. Build and test."
+              echo "build=true" >>"$GITHUB_OUTPUT"
+            fi
+            ;;
+          *) echo "build=true" >>"$GITHUB_OUTPUT" ;;
+          esac
+          build="$(sed -n 's/^build=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+          echo "Build and test: $build" >>"$GITHUB_STEP_SUMMARY"
+
       - name: Make the build matrix
         id: matrix
         run: |
@@ -98,20 +138,22 @@ jobs:
           echo "debian=$(jq -c '[.debian[] | . + {runner: (if .arch == "arm64" then "ubuntu-24.04-arm" else "ubuntu-24.04" end)}]' versions/targets.json)" >>"$GITHUB_OUTPUT"
 
       - name: Get the upstream source
+        if: steps.plan.outputs.build == 'true'
         run: scripts/fetch-upstream.sh all
 
       - name: Make temporary test keys
-        if: steps.decide.outputs.publish != 'true'
+        if: steps.plan.outputs.build == 'true' && steps.decide.outputs.publish != 'true'
         run: scripts/keys.sh generate out/ci-keys
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.plan.outputs.build == 'true'
         with:
           name: source
           path: out/source/
           retention-days: 7
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.decide.outputs.publish != 'true'
+        if: steps.plan.outputs.build == 'true' && steps.decide.outputs.publish != 'true'
         with:
           name: ci-keys
           path: out/ci-keys/
@@ -138,9 +180,12 @@ jobs:
         if: github.event_name == 'pull_request'
         run: python3 scripts/check-version-bump.py "origin/${{ github.base_ref }}"
 
+  # If "build" is false, build-apk and build-deb do not run. The jobs that need them
+  # (dkms-check, assemble, and the VM tests) then also do not run.
   build-apk:
     name: APK ${{ matrix.release }} ${{ matrix.flavor }} ${{ matrix.arch }}
     needs: prepare
+    if: needs.prepare.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -168,6 +213,7 @@ jobs:
   build-deb:
     name: DEB amneziawg-dkms
     needs: prepare
+    if: needs.prepare.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -324,6 +370,8 @@ jobs:
 
   # One check with a fixed name for branch protection. It fails if one of the other jobs
   # did not succeed. Select only this check in the branch rules.
+  # If "build" is false, the build and test jobs can be skipped. "prepare" and "lint" must
+  # always succeed.
   required:
     name: Required build checks
     needs: [prepare, lint, build-apk, build-deb, dkms-check, assemble, vm-test-alpine, vm-test-debian]
@@ -333,9 +381,16 @@ jobs:
       - name: Make sure that all jobs succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
+          BUILD: ${{ needs.prepare.outputs.build }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
+          if [ "$BUILD" = false ]; then
+            echo "The build and the tests are not necessary for this change."
+            echo "$NEEDS" | jq -e '.prepare.result == "success" and .lint.result == "success"
+              and all(.[]; .result == "success" or .result == "skipped")' >/dev/null
+          else
+            echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
+          fi
 
   publish:
     name: Publish
