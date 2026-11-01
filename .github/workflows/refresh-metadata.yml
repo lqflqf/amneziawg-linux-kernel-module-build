@@ -1,0 +1,45 @@
+name: Refresh the APT metadata
+
+# The APT Release files have a Valid-Until date (APT_VALID_DAYS in config.env). This workflow
+# signs them again each week. The packages do not change.
+
+on:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Sign the APT metadata again
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 20
+    concurrency:
+      group: packages-repository
+      cancel-in-progress: false
+    env:
+      OUT_DIR: ${{ github.workspace }}/out
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Get the packages repository name
+        run: |
+          . config.env
+          echo "PACKAGES_REPO=$PACKAGES_REPO" >>"$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.PACKAGES_REPO }}
+          ssh-key: ${{ secrets.PACKAGES_DEPLOY_KEY }}
+          path: out/packages
+          fetch-depth: 1
+      - name: Verify the published packages and sign the metadata again
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: scripts/refresh-site.sh --published out/packages --out out/site
+      - name: Push (one commit, no old history)
+        run: |
+          scripts/push-site.sh out/site out/packages "Sign the APT metadata again" \
+            "Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

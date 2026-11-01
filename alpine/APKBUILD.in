@@ -1,0 +1,44 @@
+# Contributor: amneziawg-linux-kernel-module-build
+# Maintainer: AmneziaWG package builder <lqflqf@users.noreply.github.com>
+#
+# Template. scripts/build-apk.sh replaces the @...@ values from
+# versions/upstream.env and versions/targets.json. Do not use this file directly.
+_flavor=@FLAVOR@
+_kver=@KVER@
+_krel=@KREL@
+_awgver=@AWG_VERSION@
+_kpkgver="$_kver-r$_krel"
+_kabi="$_kver-$_krel-$_flavor"
+
+pkgname=amneziawg-$_flavor
+pkgver=$_kver
+pkgrel=@PKGREL@
+pkgdesc="AmneziaWG $_awgver kernel module for linux-$_flavor $_kpkgver"
+url="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module"
+arch="x86_64 aarch64"
+license="GPL-2.0-only"
+depends="linux-$_flavor=$_kpkgver"
+makedepends="linux-$_flavor-dev=$_kpkgver"
+install="$pkgname.post-install $pkgname.post-upgrade $pkgname.post-deinstall"
+options="!check"
+source="amneziawg-linux-kernel-module-$_awgver.tar.gz"
+builddir="$srcdir/amneziawg-linux-kernel-module-$_awgver"
+
+build() {
+	unset LDFLAGS
+	# The latent_entropy GCC plugin of the kernel uses random values unless -frandom-seed is set.
+	# A fixed seed makes the build reproducible.
+	make -C src KERNELDIR="/usr/src/linux-headers-$_kabi" \
+		KCFLAGS="-frandom-seed=amneziawg-$_awgver-$_kabi" module
+}
+
+package() {
+	# DEPMOD=true: the post-install script runs depmod on the target system.
+	# CONFIG_MODULE_SIG_ALL=: the Alpine kernel signing key is not public. Do not try to sign.
+	make -C src KERNELDIR="/usr/src/linux-headers-$_kabi" \
+		INSTALL_MOD_PATH="$pkgdir" INSTALL_MOD_DIR=extra INSTALL_MOD_STRIP=1 \
+		DEPMOD=true CONFIG_MODULE_SIG_ALL= \
+		module-install
+	# Do not include the depmod index files. The linux-$_flavor package owns them.
+	rm -f "$pkgdir"/lib/modules/"$_kabi"/modules.*
+}

@@ -1,0 +1,9 @@
+PACKAGE_NAME="amneziawg"
+PACKAGE_VERSION="#MODULE_VERSION#"
+AUTOINSTALL="yes"
+
+MAKE[0]="make KERNELDIR=${kernel_source_dir} module"
+CLEAN="make KERNELDIR=${kernel_source_dir} clean"
+
+BUILT_MODULE_NAME[0]="amneziawg"
+DEST_MODULE_LOCATION[0]="/updates/dkms"

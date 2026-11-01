@@ -1,0 +1,364 @@
+name: Build, test, and publish
+
+# Pull request: build and test all targets with temporary test keys.
+# Push to main: build and test. If the release inputs are different from the published release
+#   inputs (build-info.txt in the package repository), sign with the release keys and publish.
+# Manual run: build and test. Set "publish" to publish from main.
+#
+# Security: the jobs that run upstream build code (build-apk, build-deb, dkms-check) get no
+# secrets. Only the "assemble" job signs, in the offline signer container and with gpg.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the packages after the tests pass (only from main)
+        type: boolean
+        default: false
+      distrust_published:
+        description: Keep no published file (only for an emergency key change, see docs/maintenance.md)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Runs on main do not overlap. Then each publish starts from the newest published tree.
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  OUT_DIR: ${{ github.workspace }}/out
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      environment: ${{ steps.decide.outputs.environment }}
+      alpine: ${{ steps.matrix.outputs.alpine }}
+      debian: ${{ steps.matrix.outputs.debian }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Decide if this run publishes
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . config.env
+          publish=false
+          if [ "$REF" = refs/heads/main ]; then
+            if [ "$EVENT" = workflow_dispatch ]; then
+              publish="$INPUT_PUBLISH"
+            elif [ "$EVENT" = push ]; then
+              # Compare the release inputs with the published tree, not with the previous commit.
+              # Then the next run on main repeats a publish that was canceled or that failed.
+              current="$(scripts/release-hash.sh)"
+              if ! gh api "repos/$PACKAGES_REPO" --silent 2>/dev/null; then
+                echo "::warning::$PACKAGES_REPO does not exist. Do docs/manual-setup.md first. This run does not publish."
+              else
+                published="$(gh api "repos/$PACKAGES_REPO/contents/build-info.txt" \
+                  -H 'Accept: application/vnd.github.raw' 2>/dev/null | sed -n 's/^release_inputs_hash=//p' || true)"
+                echo "Release inputs: $current. Published: ${published:-none}."
+                [ "$current" = "$published" ] || publish=true
+              fi
+            fi
+          fi
+          if [ "$publish" = true ] && [ ! -f keys/FINGERPRINTS.md ]; then
+            echo "::error::keys/ has no public keys. Do docs/manual-setup.md first."
+            exit 1
+          fi
+          echo "publish=$publish" >>"$GITHUB_OUTPUT"
+          # The "release" environment has the signing keys. Only branch main can use it.
+          if [ "$publish" = true ]; then env=release; else env=ci; fi
+          echo "environment=$env" >>"$GITHUB_OUTPUT"
+          echo "Publish: $publish (environment $env)" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Make the build matrix
+        id: matrix
+        run: |
+          echo "alpine=$(jq -c '[.alpine[] | . + {runner: (if .arch == "aarch64" then "ubuntu-24.04-arm" else "ubuntu-24.04" end)}]' versions/targets.json)" >>"$GITHUB_OUTPUT"
+          echo "debian=$(jq -c '[.debian[] | . + {runner: (if .arch == "arm64" then "ubuntu-24.04-arm" else "ubuntu-24.04" end)}]' versions/targets.json)" >>"$GITHUB_OUTPUT"
+
+      - name: Get the upstream source
+        run: scripts/fetch-upstream.sh all
+
+      - name: Make temporary test keys
+        if: steps.decide.outputs.publish != 'true'
+        run: scripts/keys.sh generate out/ci-keys
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source
+          path: out/source/
+          retention-days: 7
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.decide.outputs.publish != 'true'
+        with:
+          name: ci-keys
+          path: out/ci-keys/
+          retention-days: 1
+
+  lint:
+    name: Lint and version checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Check the documents (ASD-STE100)
+        run: python3 scripts/lint-docs.py
+      - name: Check keys/FINGERPRINTS.md
+        run: |
+          if ls keys/apt/*.asc keys/apk/*.pub >/dev/null 2>&1; then
+            scripts/keys.sh fingerprints keys | diff -u keys/FINGERPRINTS.md - ||
+              { echo "::error::Run: scripts/keys.sh fingerprints keys > keys/FINGERPRINTS.md"; exit 1; }
+          else
+            echo "keys/ has no public keys yet."
+          fi
+      - name: Check the version increases
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/check-version-bump.py "origin/${{ github.base_ref }}"
+
+  build-apk:
+    name: APK ${{ matrix.release }} ${{ matrix.flavor }} ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.alpine) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source
+          path: out/source
+      - name: Build the package (no secrets)
+        run: |
+          # shellcheck disable=SC2016 # The container expands the arguments.
+          scripts/container.sh "alpine-${{ matrix.release }}" \
+            sh -c 'apk add -q bash jq && scripts/build-apk.sh "$1" "$2" "$3"' sh \
+            "${{ matrix.release }}" "${{ matrix.flavor }}" "${{ matrix.arch }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apk-unsigned-${{ matrix.release }}-${{ matrix.flavor }}-${{ matrix.arch }}
+          path: out/apk-unsigned/
+          retention-days: 7
+
+  build-deb:
+    name: DEB amneziawg-dkms
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source
+          path: out/source
+      - name: Build the package (no secrets)
+        run: scripts/container.sh debian-trixie bash -c 'scripts/build-deb.sh'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deb
+          path: out/deb/
+          retention-days: 7
+
+  dkms-check:
+    name: DKMS ${{ matrix.suite }} ${{ matrix.arch }}
+    needs: [prepare, build-deb]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.debian) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deb
+          path: out/deb
+      - name: Build the module with DKMS and the kernel headers only
+        run: |
+          # shellcheck disable=SC2016 # The container expands the arguments.
+          scripts/container.sh "debian-${{ matrix.suite }}" \
+            bash -c 'apt-get update -q && apt-get install -y -q jq && scripts/dkms-check.sh "$1" "$2"' sh \
+            "${{ matrix.suite }}" "${{ matrix.arch }}"
+
+  assemble:
+    name: Sign and assemble the repository
+    needs: [prepare, build-apk, build-deb]
+    runs-on: ubuntu-24.04
+    environment: ${{ needs.prepare.outputs.environment }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: apk-unsigned-*
+          path: out/apk-unsigned
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deb
+          path: out/deb
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.prepare.outputs.publish != 'true'
+        with:
+          name: ci-keys
+          path: out/ci-keys
+      - name: Make the offline signer image
+        run: scripts/container.sh --make-signer
+      - name: Get the published tree
+        env:
+          PUBLISH: ${{ needs.prepare.outputs.publish }}
+        run: |
+          . config.env
+          if git clone --depth 1 "https://github.com/$PACKAGES_REPO.git" out/published; then
+            echo "Published tree: $(git -C out/published log -1 --format='%h %s' 2>/dev/null || echo empty)"
+          elif [ "$PUBLISH" = true ]; then
+            echo "::error::Cannot clone $PACKAGES_REPO. See docs/manual-setup.md." >&2
+            exit 1
+          else
+            echo "::warning::Cannot clone $PACKAGES_REPO. Start from an empty tree."
+            rm -rf out/published
+          fi
+      - name: Sign and assemble
+        env:
+          PUBLISH: ${{ needs.prepare.outputs.publish }}
+          DISTRUST_PUBLISHED: ${{ inputs.distrust_published }}
+          APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          . scripts/ci-keys-env.sh
+          args=(--out out/site --trusted-keys "$TRUSTED_KEYS_DIR")
+          [ -d out/published ] && args+=(--published out/published)
+          [ "$PUBLISH" = true ] && args+=(--release)
+          [ "$DISTRUST_PUBLISHED" = true ] && args+=(--distrust-published)
+          scripts/assemble-site.sh "${args[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: site
+          path: out/site/
+          include-hidden-files: true
+          retention-days: 7
+
+  vm-test-alpine:
+    name: VM Alpine ${{ matrix.release }} ${{ matrix.flavor }} ${{ matrix.arch }}
+    needs: [prepare, assemble]
+    runs-on: ${{ matrix.runner }}
+    # aarch64 runs without KVM (QEMU TCG). It is slow.
+    timeout-minutes: ${{ matrix.arch == 'aarch64' && 150 || 60 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.alpine) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-qemu
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: site
+          path: out/site
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source
+          path: out/source
+      - name: Install and test in a VM
+        run: scripts/test/run-vm-test.sh alpine "${{ matrix.release }}" "${{ matrix.flavor }}" "${{ matrix.arch }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: vm-logs-alpine-${{ matrix.release }}-${{ matrix.flavor }}-${{ matrix.arch }}
+          path: out/vm/*/*.log
+
+  vm-test-debian:
+    name: VM Debian ${{ matrix.suite }} ${{ matrix.arch }}
+    needs: [prepare, assemble]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.arch == 'arm64' && 180 || 60 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.debian) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-qemu
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: site
+          path: out/site
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source
+          path: out/source
+      - name: Install and test in a VM
+        run: scripts/test/run-vm-test.sh debian "${{ matrix.suite }}" "${{ matrix.arch }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: vm-logs-debian-${{ matrix.suite }}-${{ matrix.arch }}
+          path: out/vm/*/*.log
+
+  # One check with a fixed name for branch protection. It fails if one of the other jobs
+  # did not succeed. Select only this check in the branch rules.
+  required:
+    name: Required build checks
+    needs: [prepare, lint, build-apk, build-deb, dkms-check, assemble, vm-test-alpine, vm-test-debian]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Make sure that all jobs succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
+
+  publish:
+    name: Publish
+    needs: [prepare, required]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 20
+    concurrency:
+      group: packages-repository
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: site
+          path: out/site
+      - name: Get the packages repository name
+        run: |
+          . config.env
+          echo "PACKAGES_REPO=$PACKAGES_REPO" >>"$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.PACKAGES_REPO }}
+          ssh-key: ${{ secrets.PACKAGES_DEPLOY_KEY }}
+          path: out/packages
+          fetch-depth: 1
+      - name: Push the tested tree (one commit, no old history)
+        run: |
+          . versions/upstream.env
+          scripts/push-site.sh out/site out/packages "Publish AmneziaWG $AWG_VERSION" \
+            "Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            "Source commit: $GITHUB_SHA"
+          cat out/site/build-info.txt >>"$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,26 @@
+Source: amneziawg-linux-kmod
+Section: kernel
+Priority: optional
+Maintainer: AmneziaWG package builder <lqflqf@users.noreply.github.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-sequence-dkms,
+Standards-Version: 4.7.0
+Homepage: https://github.com/amnezia-vpn/amneziawg-linux-kernel-module
+Vcs-Git: https://github.com/lqflqf/amneziawg-linux-kernel-module-build.git
+Vcs-Browser: https://github.com/lqflqf/amneziawg-linux-kernel-module-build
+Rules-Requires-Root: no
+
+Package: amneziawg-dkms
+Architecture: all
+Depends:
+ ${misc:Depends},
+Recommends:
+ amneziawg-archive-keyring,
+Description: AmneziaWG kernel module (DKMS source)
+ AmneziaWG is a VPN protocol that is based on WireGuard. It adds
+ obfuscation of the packet headers and junk packets.
+ .
+ This package contains the source of the amneziawg kernel module.
+ DKMS builds the module for each installed kernel. You must install the
+ kernel headers that agree with each kernel.

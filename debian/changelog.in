@@ -1,0 +1,5 @@
+amneziawg-linux-kmod (@DEB_VERSION@) unstable; urgency=medium
+
+  * Build AmneziaWG @AWG_VERSION@ (upstream tag @AWG_TAG@, commit @AWG_COMMIT@).
+
+ -- AmneziaWG package builder <lqflqf@users.noreply.github.com>  @DATE@

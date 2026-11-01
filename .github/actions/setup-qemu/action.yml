@@ -1,0 +1,27 @@
+name: Set up QEMU
+description: Install QEMU, the cloud-init tools, and the aarch64 UEFI firmware. Give access to KVM if it is available.
+runs:
+  using: composite
+  steps:
+    - name: Install QEMU
+      shell: bash
+      run: |
+        sudo apt-get update -q
+        if [ "$(uname -m)" = aarch64 ]; then
+          pkgs="qemu-system-arm qemu-efi-aarch64"
+        else
+          pkgs="qemu-system-x86"
+        fi
+        sudo apt-get install -y -q --no-install-recommends $pkgs qemu-utils cloud-image-utils
+    - name: Give access to KVM
+      shell: bash
+      run: |
+        if [ -e /dev/kvm ]; then
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          echo "KVM is available."
+        else
+          echo "KVM is not available. QEMU uses TCG (slow)."
+        fi

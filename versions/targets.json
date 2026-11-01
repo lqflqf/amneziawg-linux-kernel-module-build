@@ -1,0 +1,18 @@
+{
+  "alpine": [
+    {"release": "3.24", "flavor": "virt", "arch": "x86_64", "kver": "6.18.59", "krel": 0, "rebuild": 0},
+    {"release": "3.24", "flavor": "virt", "arch": "aarch64", "kver": "6.18.59", "krel": 0, "rebuild": 0},
+    {"release": "3.24", "flavor": "lts", "arch": "x86_64", "kver": "6.18.59", "krel": 0, "rebuild": 0},
+    {"release": "3.24", "flavor": "lts", "arch": "aarch64", "kver": "6.18.59", "krel": 0, "rebuild": 0},
+    {"release": "3.23", "flavor": "virt", "arch": "x86_64", "kver": "6.18.59", "krel": 0, "rebuild": 0},
+    {"release": "3.23", "flavor": "virt", "arch": "aarch64", "kver": "6.18.59", "krel": 0, "rebuild": 0},
+    {"release": "3.23", "flavor": "lts", "arch": "x86_64", "kver": "6.18.59", "krel": 0, "rebuild": 0},
+    {"release": "3.23", "flavor": "lts", "arch": "aarch64", "kver": "6.18.59", "krel": 0, "rebuild": 0}
+  ],
+  "debian": [
+    {"suite": "trixie", "version": "13", "arch": "amd64", "headers": "6.12.113-1"},
+    {"suite": "trixie", "version": "13", "arch": "arm64", "headers": "6.12.113-1"},
+    {"suite": "bookworm", "version": "12", "arch": "amd64", "headers": "6.1.190-1"},
+    {"suite": "bookworm", "version": "12", "arch": "arm64", "headers": "6.1.190-1"}
+  ]
+}

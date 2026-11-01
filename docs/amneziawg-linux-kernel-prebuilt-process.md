@@ -41,7 +41,7 @@ For each release:
 3.  Build the Debian DKMS package.
 4.  Run package and installation tests.
 5.  Sign the packages and repository metadata.
-6.  Publish the output to `amneziawg-packages`.
+6.  Publish the output to `amneziawg-linux-kernel-module-packages`.
 
 Use separate jobs or workflow steps for each target. Keep the build
 inputs and versions fixed.
@@ -89,3 +89,22 @@ Start with two test targets:
 
 Make both targets build, install, and load successfully. Then add more
 Alpine flavors, releases, and architectures.
+
+## Implementation in this repository
+
+| Process step | Location |
+|---|---|
+| Fixed upstream version, targets, images, and snapshot | `versions/upstream.env`, `versions/targets.json`, `versions/build.env` |
+| Alpine APK recipe (built without secrets) | `alpine/APKBUILD.in`, `scripts/build-apk.sh` |
+| Debian DKMS package | `debian/`, `scripts/build-deb.sh`, `scripts/dkms-check.sh` |
+| Trusted public keys and fingerprints | `keys/`, `scripts/keys.sh` |
+| Signing (offline container) and keyring packages | `scripts/sign-apks.sh`, `scripts/build-keyring-packages.sh` |
+| Signed repository indexes | `scripts/assemble-site.sh`, `scripts/repo-alpine.sh`, `scripts/repo-apt.sh`, `scripts/verify-apt-pool.py` |
+| Installation tests on clean systems | `scripts/test/run-vm-test.sh` |
+| Build, test, and publish workflow | `.github/workflows/build.yml` |
+| Weekly signature of the APT metadata | `.github/workflows/refresh-metadata.yml`, `scripts/refresh-site.sh` |
+| Tracking of upstream and kernel versions, key expiry | `scripts/check-updates.py`, `scripts/check-key-expiry.sh`, `.github/workflows/track-updates.yml` |
+| Checks of the documents and the version increases | `scripts/lint-docs.py`, `scripts/check-version-bump.py` |
+
+See also [manual-setup.md](manual-setup.md), [maintenance.md](maintenance.md), and the
+installation steps in [README.md](../README.md).

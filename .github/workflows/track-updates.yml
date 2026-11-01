@@ -1,0 +1,77 @@
+name: Track updates
+
+# Find new upstream versions and new kernel versions. Open or update one pull request
+# that changes versions/. The build workflow tests the pull request. Merge it to publish.
+# Also find APT signing keys that expire soon, and open an issue for them.
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: track-updates
+
+jobs:
+  check:
+    name: Check for updates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      BRANCH: automation/update-versions
+    steps:
+      # UPDATE_PR_TOKEN is necessary. A pull request from GITHUB_TOKEN does not start the build workflow.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          token: ${{ secrets.UPDATE_PR_TOKEN }}
+
+      - name: Update the version lock files
+        id: check
+        run: python3 scripts/check-updates.py --summary "$RUNNER_TEMP/summary.md"
+
+      - name: Open or update the pull request
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.UPDATE_PR_TOKEN }}
+        run: |
+          cat "$RUNNER_TEMP/summary.md" >>"$GITHUB_STEP_SUMMARY"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          { echo "Update the version lock files"; echo; cat "$RUNNER_TEMP/summary.md"; } >"$RUNNER_TEMP/message.txt"
+          git commit -q -a -F "$RUNNER_TEMP/message.txt"
+          git push --force origin "$BRANCH"
+          title="Update the AmneziaWG and kernel versions"
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr edit "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/summary.md"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/summary.md"
+          fi
+
+  key-expiry:
+    name: Check the key expiry dates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Find keys that expire in fewer than 90 days
+        id: expiry
+        run: scripts/check-key-expiry.sh 90
+      - name: Open an issue
+        if: steps.expiry.outputs.expiring == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.expiry.outputs.report }}
+        run: |
+          title="Replace the APT signing key before it expires"
+          if [ -z "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[].number')" ]; then
+            { echo "An APT signing key expires soon:"; echo; sed 's/^/- /' "$REPORT"; echo;
+              echo "Do the procedure \"Replace a signing key\" in docs/maintenance.md."; } >"$RUNNER_TEMP/issue.md"
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"
+          fi

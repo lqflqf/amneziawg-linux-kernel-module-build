@@ -1,0 +1,4 @@
+#!/bin/sh
+# Template for the post-install, post-upgrade, and post-deinstall scripts.
+depmod -a @KABI@ 2>/dev/null || true
+exit 0

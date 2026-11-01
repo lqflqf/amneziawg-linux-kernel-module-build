@@ -1,0 +1,19 @@
+# Maintainer: AmneziaWG package builder <lqflqf@users.noreply.github.com>
+#
+# Template. scripts/build-keyring-packages.sh replaces the @...@ values.
+pkgname=amneziawg-keys
+pkgver=@KEYS_VERSION@
+pkgrel=0
+pkgdesc="Public keys of the AmneziaWG package repository"
+url="https://github.com/lqflqf/amneziawg-linux-kernel-module-build"
+arch="noarch"
+license="GPL-2.0-only"
+options="!check"
+source="@SOURCES@"
+
+package() {
+	local f
+	for f in $source; do
+		install -Dm644 "$srcdir/$f" "$pkgdir/etc/apk/keys/$f"
+	done
+}

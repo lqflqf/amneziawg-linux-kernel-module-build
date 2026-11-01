@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+case "$1" in
+configure | reconfigure)
+	# Recommend a reboot when a newer module is available than the loaded module.
+	old_version="$(cat /sys/module/amneziawg/version 2>/dev/null)" || exit 0
+	new_version="$(modinfo -F version amneziawg 2>/dev/null)" || exit 0
+	dpkg --compare-versions "$old_version" lt "$new_version" || exit 0
+	touch /run/reboot-required || true
+	grep -Fqsx amneziawg-dkms /run/reboot-required.pkgs ||
+		echo amneziawg-dkms >>/run/reboot-required.pkgs || true
+	;;
+esac
+
+exit 0
