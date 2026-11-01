@@ -133,7 +133,9 @@ qemu_args=(
 	-name "$name" -accel "$accel" -cpu "$cpu" -smp "$VM_CPUS" -m "$VM_MEM"
 	-drive "if=virtio,file=$vm/disk.qcow2,format=qcow2"
 	-drive "if=virtio,file=$vm/seed.img,format=raw,readonly=on"
-	-nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$ssh_port-:22"
+	# romfile=: no network boot ROM. Then the test does not need the ipxe-qemu package.
+	-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22"
+	-device "virtio-net-pci,netdev=net0,romfile="
 	-device virtio-rng-pci
 	-serial "file:$vm/console.log" -display none
 	-daemonize -pidfile "$vm/qemu.pid"
