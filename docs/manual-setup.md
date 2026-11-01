@@ -107,8 +107,17 @@ can use this environment.
 
 Do steps 5, 6, and 7 in this directory. Keep the terminal open until step 7 is complete.
 
+You also need a backup directory outside the work directory, for example on a USB drive that
+you keep offline. Steps 6 and 7 write the encrypted backups of the private keys to it.
+Step 7 deletes the work directory. Thus do not use a directory in `$WORK` for the backups.
+
 ```sh
 export BUILD_REPO="$PWD"
+export BACKUP_DIR=/path/to/offline/backup   # Change this path.
+mkdir -p "$BACKUP_DIR"
+umask 077
+# gpg shows its passphrase prompts on this terminal.
+export GPG_TTY="$(tty)"
 export WORK="$(mktemp -d -p /dev/shm amneziawg-keys.XXXXXX)"
 chmod 700 "$WORK"
 cd "$WORK"
@@ -164,11 +173,12 @@ The Alpine key signs the APK packages and the `APKINDEX.tar.gz` files.
      --repo lqflqf/amneziawg-linux-kernel-module-build < "$WORK/amneziawg-packages.rsa"
    ```
 
-3. Make an encrypted backup copy. `gpg` asks for a backup passphrase. Keep the passphrase in
-   a password manager. Move the `.gpg` file to a safe offline location.
+3. Make an encrypted backup copy in `$BACKUP_DIR`. `gpg` asks for a backup passphrase. Keep
+   the passphrase in a password manager.
 
    ```sh
-   gpg --symmetric --cipher-algo AES256 -o amneziawg-packages.rsa.gpg "$WORK/amneziawg-packages.rsa"
+   gpg --symmetric --no-symkey-cache --cipher-algo AES256 \
+     -o "$BACKUP_DIR/amneziawg-packages.rsa.gpg" "$WORK/amneziawg-packages.rsa"
    ```
 
 ## Step 7: Make the APT signing key
@@ -202,16 +212,32 @@ The OpenPGP key signs the `InRelease` and `Release.gpg` files of the APT reposit
    gpg --armor --export "$FPR" > "$BUILD_REPO/keys/apt/amneziawg-archive-key-1.asc"
    ```
 
-4. Make an encrypted backup copy. Move the `.gpg` file to a safe offline location.
+4. Make an encrypted backup copy in `$BACKUP_DIR`. The first command asks for the passphrase of
+   the APT key. The second command asks for a backup passphrase. Keep the backup passphrase in
+   a password manager.
 
    ```sh
-   gpg --armor --export-secret-keys "$FPR" |
-     gpg --symmetric --cipher-algo AES256 -o amneziawg-apt-key.asc.gpg
+   gpg --armor --export-secret-keys "$FPR" > "$WORK/apt-key.asc" &&
+     test -s "$WORK/apt-key.asc" &&
+     gpg --symmetric --no-symkey-cache --cipher-algo AES256 \
+       -o "$BACKUP_DIR/amneziawg-apt-key.asc.gpg" "$WORK/apt-key.asc"
+   rm -f "$WORK/apt-key.asc"
    ```
 
-5. Remove the work directory. The private keys are now only in GitHub and in the backups.
+5. Make sure that you can decrypt the two backups. Each command asks for its backup
+   passphrase and must show `OK`. If a command does not show `OK`, do steps 6.3 and 7.4 again.
+   Do not continue.
 
    ```sh
+   gpg --no-symkey-cache -d "$BACKUP_DIR/amneziawg-packages.rsa.gpg" >/dev/null && echo OK
+   gpg --no-symkey-cache -d "$BACKUP_DIR/amneziawg-apt-key.asc.gpg" >/dev/null && echo OK
+   ```
+
+6. Stop the GnuPG agent of the work directory, and remove the work directory. The private keys
+   are now only in GitHub and in the backups. Move the backups to a safe offline location.
+
+   ```sh
+   gpgconf --kill gpg-agent
    cd "$BUILD_REPO"
    rm -rf "$WORK"
    unset GNUPGHOME WORK FPR
