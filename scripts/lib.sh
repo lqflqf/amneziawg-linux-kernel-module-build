@@ -69,7 +69,7 @@ release_input_files() {
 			[ -e "$p" ] && paths+=("$p")
 		done
 		find "${paths[@]}" -type f |
-			grep -v -E '^scripts/(test/|check-updates\.py$|check-version-bump\.py$|lint-docs\.py$)|__pycache__' |
+			grep -v -E '^scripts/(test/|check-updates\.py$|check-version-bump\.py$|lint-docs\.py$|plan-ci\.py$)|__pycache__' |
 			LC_ALL=C sort
 	)
 }

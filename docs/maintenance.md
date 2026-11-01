@@ -8,16 +8,18 @@ setup, see [manual-setup.md](manual-setup.md). For the design, see
 
 | Workflow | Starts on | Result |
 |---|---|---|
-| `build.yml` | Pull request | Builds and tests all targets. Uses temporary test keys. Publishes nothing. |
+| `build.yml` | Pull request | Builds and tests all targets. Uses temporary test keys. Publishes nothing. Some changes have no effect on the packages or the tests. For them, only the `lint` job runs (see [Skip the build](#skip-the-build)). |
 | `build.yml` | Push to `main`, and the release inputs are different from the published release inputs | Builds, tests, signs with the release keys, and publishes. |
+| `build.yml` | Push to `main`, and the release inputs are the same as the published release inputs | Builds and tests if the pushed commits change the packages or the tests. Else only the `lint` job runs. Publishes nothing. |
 | `build.yml` | Manual run with `publish=true` on `main` | Builds, tests, signs, and publishes. |
 | `track-updates.yml` | Each day, or a manual run | Finds new versions and opens one pull request. Opens an issue if an APT key expires in fewer than 90 days. |
 | `refresh-metadata.yml` | Each week, or a manual run | Signs the APT metadata again. The packages do not change. |
 
 The build workflow has these jobs:
 
-1. `prepare`: decides if the run publishes, reads `versions/targets.json`, gets the upstream
-   source, and makes the temporary test keys (not for a release).
+1. `prepare`: decides if the run publishes and if the run builds and tests. Then it reads
+   `versions/targets.json`, gets the upstream source, and makes the temporary test keys
+   (not for a release).
 2. `lint`: checks the documents (ASD-STE100), `keys/FINGERPRINTS.md`, and the version
    increases (pull requests only).
 3. `build-apk`: builds one APK for each Alpine target. The `aarch64` targets use the
@@ -30,7 +32,8 @@ The build workflow has these jobs:
 7. `vm-test-alpine` and `vm-test-debian`: install the packages from the signed repository in
    clean QEMU VMs. They load the module and send packets through a tunnel.
 8. `required` (check name `Required build checks`): fails if one of the jobs above failed.
-   The branch rules use only this check.
+   The branch rules use only this check. If the run does not build and test, the jobs 3 to 7
+   are skipped. Then `prepare` and `lint` must succeed.
 9. `publish`: pushes the tested tree to the package repository.
 
 The publish job publishes the same files that the VM tests used.
@@ -57,6 +60,26 @@ packages and the repository. The tests and the CI checks are not release inputs.
 
 Each push to `main` compares the hash with the published hash. If they are different, the run
 publishes. Thus, if a publish run is canceled or fails, the next run on `main` publishes.
+
+### Skip the build
+
+The VM tests on `aarch64` and `arm64` use QEMU without KVM. They take approximately 25 minutes.
+Thus the build workflow does not build and test if the change cannot have an effect on the
+packages or on the tests:
+
+- Pull request: `scripts/plan-ci.py` compares the pull request with the base branch. The run skips
+  the build and the tests only if all changed files are in the list `NO_BUILD` in the script.
+  Also, no changed file can be a release input. Examples are `docs/`, `track-updates.yml`, and
+  `scripts/check-updates.py`. A new or unknown file always starts the build and the tests.
+  For a renamed file, the script checks the old name and the new name.
+- Push to `main`: the run builds and tests if it publishes. It also builds and tests if
+  `scripts/plan-ci.py` finds a change in the pushed commits. A pull request can have old
+  test results, because the branch rules do not require an up-to-date branch.
+- Manual run: the run always builds and tests.
+
+To test all targets on `main` without a publish, start a manual run with `publish=false`.
+If you add a file that does not have an effect on the packages or the tests, you can add it
+to `NO_BUILD`.
 
 ## Version files
 
