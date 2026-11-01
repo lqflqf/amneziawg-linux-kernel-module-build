@@ -33,6 +33,14 @@ concurrency:
 
 env:
   OUT_DIR: ${{ github.workspace }}/out
+  # "git init" in actions/checkout prints a hint about the default branch name. Checkout uses
+  # a temporary HOME, thus set the git configuration with environment variables.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+  # actions/download-artifact v8.0.2 uses the deprecated Buffer() constructor of Node.js. This
+  # workflow runs no other Node.js code. Do not show the DeprecationWarnings.
+  NODE_OPTIONS: --no-deprecation
 
 jobs:
   prepare:

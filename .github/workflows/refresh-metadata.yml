@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # "git init" in actions/checkout prints a hint about the default branch name. Checkout uses
+  # a temporary HOME, thus set the git configuration with environment variables.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
 jobs:
   refresh:
     name: Sign the APT metadata again
