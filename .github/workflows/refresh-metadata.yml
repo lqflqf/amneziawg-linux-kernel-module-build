@@ -23,12 +23,12 @@ jobs:
     env:
       OUT_DIR: ${{ github.workspace }}/out
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Get the packages repository name
         run: |
           . config.env
           echo "PACKAGES_REPO=$PACKAGES_REPO" >>"$GITHUB_ENV"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.PACKAGES_REPO }}
           ssh-key: ${{ secrets.PACKAGES_DEPLOY_KEY }}

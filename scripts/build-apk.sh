@@ -63,7 +63,11 @@ rm -rf "$repo"
 cd "$work" || exit 1
 abuild -F checksum
 log "Build amneziawg-$flavor-$kver-r$pkgrel for $release/$arch"
-abuild -F -r -P "$repo" -s "$work"
+# Install the build dependencies with apk, not with "abuild -r". Then abuild does not use a
+# local package repository, and it does not make an index for it. scripts/assemble-site.sh
+# makes the real indexes.
+apk add -q "linux-$flavor-dev=$kver-r$krel"
+abuild -F -d -P "$repo" -s "$work" validate clean fetch unpack prepare build rootpkg
 
 apk_file="$(find "$repo" -name "amneziawg-$flavor-$kver-r$pkgrel.apk" | head -n 1)"
 [ -n "$apk_file" ] || die "The package was not made"

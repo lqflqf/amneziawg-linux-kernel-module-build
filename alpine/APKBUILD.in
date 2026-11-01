@@ -20,7 +20,9 @@ license="GPL-2.0-only"
 depends="linux-$_flavor=$_kpkgver"
 makedepends="linux-$_flavor-dev=$_kpkgver"
 install="$pkgname.post-install $pkgname.post-upgrade $pkgname.post-deinstall"
-options="!check"
+# !usrmerge: the Alpine kernel packages keep the modules in /lib/modules, thus this package must too.
+# !archcheck: abuild cannot find the architecture in a compressed module (.ko.gz).
+options="!check !usrmerge !archcheck"
 source="amneziawg-linux-kernel-module-$_awgver.tar.gz"
 builddir="$srcdir/amneziawg-linux-kernel-module-$_awgver"
 
@@ -33,12 +35,18 @@ build() {
 }
 
 package() {
-	# DEPMOD=true: the post-install script runs depmod on the target system.
-	# CONFIG_MODULE_SIG_ALL=: the Alpine kernel signing key is not public. Do not try to sign.
-	make -C src KERNELDIR="/usr/src/linux-headers-$_kabi" \
-		INSTALL_MOD_PATH="$pkgdir" INSTALL_MOD_DIR=extra INSTALL_MOD_STRIP=1 \
-		DEPMOD=true CONFIG_MODULE_SIG_ALL= \
-		module-install
-	# Do not include the depmod index files. The linux-$_flavor package owns them.
-	rm -f "$pkgdir"/lib/modules/"$_kabi"/modules.*
+	# Install the module like "make modules_install", but without depmod. The headers have no
+	# System.map, thus depmod cannot run here. The post-install script runs depmod.
+	# The Alpine kernel signing key is not public, thus the module is not signed.
+	local dest="$pkgdir/lib/modules/$_kabi/extra" config="/usr/src/linux-headers-$_kabi/.config"
+	install -Dm644 src/amneziawg.ko "$dest/amneziawg.ko"
+	strip --strip-debug "$dest/amneziawg.ko"
+	# Use the same compression as the modules of the kernel package.
+	if grep -q '^CONFIG_MODULE_COMPRESS_GZIP=y' "$config"; then
+		gzip -n -f "$dest/amneziawg.ko"
+	elif grep -q '^CONFIG_MODULE_COMPRESS_XZ=y' "$config"; then
+		xz --check=crc32 --lzma2=dict=1MiB -f "$dest/amneziawg.ko"
+	elif grep -q '^CONFIG_MODULE_COMPRESS_ZSTD=y' "$config"; then
+		zstd -q -T0 --rm -f "$dest/amneziawg.ko"
+	fi
 }
