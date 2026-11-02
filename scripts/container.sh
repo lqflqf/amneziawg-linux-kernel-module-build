@@ -12,11 +12,16 @@
 # --offline: no network in the container.
 # -e NAME:   copy the environment variable NAME into the container.
 # CONTAINER_NETWORK: Docker network for the other containers (default: Docker default).
+# The signer base image is SIGNER_BASE in versions/build.env.
+# shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 load_config
 
 SIGNER_IMAGE=amneziawg-signer:local
-SIGNER_BASE=alpine-3.24
+: "${SIGNER_BASE:?SIGNER_BASE is not set in versions/build.env}"
+# The scripts in the containers use /w/out. Thus OUT_DIR must be out/ in the repository.
+[ "$(realpath -m "$OUT_DIR")" = "$(realpath -m "$ROOT_DIR/out")" ] ||
+	die "OUT_DIR must be $ROOT_DIR/out for the containers (now: $OUT_DIR)"
 
 # Print the pinned image reference for <image>.
 image_ref() {
@@ -34,11 +39,11 @@ image_ref() {
 if [ "${1:-}" = --make-signer ]; then
 	base="$(image_ref "$SIGNER_BASE")"
 	name="amneziawg-signer-build-$$"
+	trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
 	log "Make $SIGNER_IMAGE from $base"
 	docker run --name "$name" ${CONTAINER_NETWORK:+--network "$CONTAINER_NETWORK"} "$base" \
 		apk add -q abuild openssl bash jq
 	docker commit "$name" "$SIGNER_IMAGE" >/dev/null
-	docker rm -f "$name" >/dev/null
 	exit 0
 fi
 

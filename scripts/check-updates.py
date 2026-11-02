@@ -14,6 +14,8 @@ Rules:
 If something changed, the script writes "changed=true" to $GITHUB_OUTPUT.
 """
 
+from __future__ import annotations
+
 import argparse
 import functools
 import gzip
@@ -27,7 +29,9 @@ import sys
 import tarfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+import buildlib
+
+ROOT = buildlib.ROOT
 UPSTREAM_ENV = ROOT / "versions" / "upstream.env"
 TARGETS = Path(os.environ.get("TARGETS_FILE", ROOT / "versions" / "targets.json"))
 
@@ -44,7 +48,7 @@ class NotFound(Exception):
     pass
 
 
-def fetch(url):
+def fetch(url: str) -> bytes:
     print(f"GET {url}", file=sys.stderr)
     proc = subprocess.run(
         ["curl", "-fsSL", "--retry", "3", "--connect-timeout", "30", "--max-time", "300",
@@ -58,32 +62,12 @@ def fetch(url):
     return proc.stdout[:-3]
 
 
-def read_env(path):
-    values = {}
-    for line in path.read_text().splitlines():
-        m = re.match(r"^([A-Z0-9_]+)=(.*)$", line)
-        if m:
-            values[m.group(1)] = m.group(2)
-    return values
-
-
-def write_env(path, updates):
-    lines = path.read_text().splitlines()
-    out = []
-    for line in lines:
-        m = re.match(r"^([A-Z0-9_]+)=", line)
-        if m and m.group(1) in updates:
-            line = f"{m.group(1)}={updates[m.group(1)]}"
-        out.append(line)
-    path.write_text("\n".join(out) + "\n")
-
-
-def latest_tag(repo):
+def latest_tag(repo: str) -> tuple[str, str]:
     """Return (tag, commit) of the newest release tag of a git repository."""
     text = subprocess.run(
         ["git", "ls-remote", "--tags", repo], check=True, capture_output=True, text=True
     ).stdout
-    commits = {}
+    commits: dict[str, str] = {}
     for line in text.splitlines():
         sha, ref = line.split("\t")
         name = ref.removeprefix("refs/tags/")
@@ -103,38 +87,36 @@ def latest_tag(repo):
     return tag, commits[tag]
 
 
-def tag_to_version(tag):
+def tag_to_version(tag: str) -> str:
     # "v3.0.20260731-04" -> "3.0.20260731.04". Debian and DKMS sort this version correctly.
     return tag[1:].replace("-", ".")
 
 
 @functools.lru_cache(maxsize=None)
-def alpine_index(release, arch):
+def alpine_index(release: str, arch: str) -> str:
     data = fetch(f"{ALPINE_MIRROR}/v{release}/main/{arch}/APKINDEX.tar.gz")
     # The file has a signature gzip stream and then the index gzip stream.
     raw = gzip.GzipFile(fileobj=io.BytesIO(data)).read()
     with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
-        return tar.extractfile("APKINDEX").read().decode()
+        member = tar.extractfile("APKINDEX")
+        if member is None:
+            raise SystemExit(f"No APKINDEX in Alpine {release}/{arch}")
+        return member.read().decode()
 
 
-def alpine_kernel(release, flavor, arch):
+def alpine_kernel(release: str, flavor: str, arch: str) -> tuple[str, int]:
     name = f"linux-{flavor}-dev"
     for block in alpine_index(release, arch).split("\n\n"):
         fields = dict(line.split(":", 1) for line in block.splitlines() if ":" in line)
         if fields.get("P") == name:
             m = re.match(r"^(.+)-r(\d+)$", fields["V"])
+            if not m:
+                raise SystemExit(f"Unknown version {fields['V']} of {name}")
             return m.group(1), int(m.group(2))
     raise SystemExit(f"No {name} in Alpine {release}/{arch}")
 
 
-def dpkg_cmp(a, b):
-    if a == b:
-        return 0
-    lt = subprocess.run(["dpkg", "--compare-versions", a, "lt", b]).returncode == 0
-    return -1 if lt else 1
-
-
-def debian_package_version(base, dist, arch, name):
+def debian_package_version(base: str, dist: str, arch: str, name: str) -> str | None:
     try:
         data = lzma.decompress(fetch(f"{base}/dists/{dist}/main/binary-{arch}/Packages.xz"))
     except NotFound:
@@ -145,7 +127,7 @@ def debian_package_version(base, dist, arch, name):
     return m.group(1).decode() if m else None
 
 
-def debian_headers(suite, arch):
+def debian_headers(suite: str, arch: str) -> str:
     name = f"linux-headers-{arch}"
     versions = []
     for base, dist in DEBIAN_ARCHIVES:
@@ -154,19 +136,19 @@ def debian_headers(suite, arch):
             versions.append(version)
     if not versions:
         raise SystemExit(f"No {name} in Debian {suite}")
-    return max(versions, key=functools.cmp_to_key(dpkg_cmp))
+    return max(versions, key=functools.cmp_to_key(buildlib.deb_compare))
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--summary", help="Write a Markdown summary of the changes to this file")
     parser.add_argument("--dry-run", action="store_true", help="Do not change the files")
     args = parser.parse_args()
 
-    env = read_env(UPSTREAM_ENV)
+    env = buildlib.read_env(UPSTREAM_ENV.read_text())
     targets = json.loads(TARGETS.read_text())
-    changes = []
-    env_updates = {}
+    changes: list[str] = []
+    env_updates: dict[str, str] = {}
 
     tag, commit = latest_tag(env["AWG_REPO"])
     upstream_changed = tag != env["AWG_TAG"] or commit != env["AWG_COMMIT"]
@@ -208,7 +190,7 @@ def main():
 
     if changes and not args.dry_run:
         if env_updates:
-            write_env(UPSTREAM_ENV, env_updates)
+            buildlib.write_env(UPSTREAM_ENV, env_updates)
         TARGETS.write_text(format_targets(targets))
 
     if args.summary:
@@ -225,7 +207,7 @@ def main():
     return 0
 
 
-def format_targets(targets):
+def format_targets(targets: dict[str, list[dict]]) -> str:
     """Write one target on each line, as in the file in the repository."""
     out = ["{"]
     sections = list(targets.items())

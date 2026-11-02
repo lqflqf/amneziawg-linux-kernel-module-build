@@ -8,7 +8,8 @@
 # Other runs:   the keys come from out/ci-keys (temporary test keys from the "prepare" job).
 
 if [ "${PUBLISH:-false}" = true ]; then
-	APK_KEY_NAME="$(sed -n 's/^RELEASE_APK_KEY_NAME=//p' config.env)"
+	# shellcheck source=../config.env
+	APK_KEY_NAME="$(. ./config.env && printf '%s' "$RELEASE_APK_KEY_NAME")"
 	for v in APK_KEY_NAME APK_PRIVATE_KEY GPG_PRIVATE_KEY; do
 		if [ -z "${!v:-}" ]; then
 			echo "::error::$v is not set. Add it to the GitHub environment \"release\" (see docs/manual-setup.md)." >&2

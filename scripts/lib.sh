@@ -59,23 +59,31 @@ alpine_pkgrel() {
 	echo $((krel * 100 + rebuild))
 }
 
-# Files that change the published packages, metadata, or start page.
+# Files that change the published packages, metadata, or start page (scripts/buildlib.py).
 # The tests, the tracker, and the CI checks are not release inputs.
 release_input_files() {
-	(
-		cd "$ROOT_DIR" || exit 1
-		local p paths=()
-		for p in versions config.env alpine debian patches keys README.md scripts; do
-			[ -e "$p" ] && paths+=("$p")
-		done
-		find "${paths[@]}" -type f |
-			grep -v -E '^scripts/(test/|check-updates\.py$|check-version-bump\.py$|lint-docs\.py$|plan-ci\.py$)|__pycache__' |
-			LC_ALL=C sort
-	)
+	python3 "$ROOT_DIR/scripts/buildlib.py" release-files
 }
 
 # Hash of the release inputs. The published tree records it in build-info.txt.
 # The build workflow publishes when the published hash is different.
 release_inputs_hash() {
-	(cd "$ROOT_DIR" && release_input_files | xargs sha256sum) | sha256sum | cut -d' ' -f1
+	python3 "$ROOT_DIR/scripts/buildlib.py" release-hash
+}
+
+# Compare a new package with the published package that has the same file name.
+# Usage: published_action <same content: yes|no> <published input hash> <new input hash>
+# Prints one word:
+#   same     The content is the same.
+#   rebuilt  The content is different, but the package inputs are the same. Thus the build
+#            tools changed (for example gcc or abuild from the Alpine repository).
+#   changed  The package inputs changed, but the version did not increase.
+published_action() {
+	if [ "$1" = yes ]; then
+		echo same
+	elif [ -n "$2" ] && [ "$2" = "$3" ]; then
+		echo rebuilt
+	else
+		echo changed
+	fi
 }
