@@ -2,8 +2,11 @@
 # Install the packages from a package repository tree in a clean QEMU VM and test them.
 #
 # Usage:
-#   scripts/test/run-vm-test.sh alpine <release> <flavor> <arch>
-#   scripts/test/run-vm-test.sh debian <suite> <arch>
+#   scripts/test/run-vm-test.sh [--image-key] alpine <release> <flavor> <arch>
+#   scripts/test/run-vm-test.sh [--image-key] debian <suite> <arch>
+#
+# --image-key: print only a key for the cloud image (file name and checksum), then stop.
+#              The build workflow uses it as the cache key of VM_CACHE.
 #
 # Environment:
 #   SITE_DIR     Package repository tree (default: out/site, from scripts/assemble-site.sh)
@@ -15,9 +18,15 @@
 #                Use it only for local network settings, for example a package mirror.
 # Needs: qemu-system-x86_64 or qemu-system-aarch64, qemu-img, cloud-localds, ssh, curl, python3.
 # For aarch64 also: qemu-efi-aarch64 (UEFI firmware).
+# shellcheck source=../lib.sh
 . "$(dirname "$0")/../lib.sh"
 load_config
 
+image_key=0
+if [ "${1:-}" = --image-key ]; then
+	image_key=1
+	shift
+fi
 distro="${1:?Usage: $0 alpine <release> <flavor> <arch> | debian <suite> <arch>}"
 case "$distro" in
 alpine)
@@ -42,12 +51,6 @@ VM_CPUS="${VM_CPUS:-2}"
 VM_CACHE="${VM_CACHE:-$OUT_DIR/vm-cache}"
 vm="$OUT_DIR/vm/$name"
 TOOLS_TARBALL="$OUT_DIR/source/amneziawg-tools.tar.gz"
-
-[ -d "$SITE_DIR" ] || die "$SITE_DIR is missing. Run scripts/assemble-site.sh first."
-[ -f "$TOOLS_TARBALL" ] || die "$TOOLS_TARBALL is missing. Run scripts/fetch-upstream.sh tools first."
-
-rm -rf "$vm"
-mkdir -p "$vm" "$VM_CACHE"
 
 # ---------------------------------------------------------------- image
 case "$arch" in
@@ -77,16 +80,23 @@ image_url() {
 	fi
 }
 
+# Print the SHA-512 checksum of <url> from the image server.
+image_checksum() {
+	local url="$1" sum
+	if [ "$distro" = alpine ]; then
+		sum="$(curl -fsSL "$url.sha512" | awk '{print $1}')"
+	else
+		sum="$(curl -fsSL "$(dirname "$url")/SHA512SUMS" | awk -v f="$(basename "$url")" '$2 == f {print $1}')"
+	fi
+	[ -n "$sum" ] || die "Cannot get the checksum of $url"
+	echo "$sum"
+}
+
 # Download <url> to the cache and verify the SHA-512 checksum from the image server.
 fetch_image() {
 	local url="$1" file sum expected
 	file="$VM_CACHE/$(basename "$url")"
-	if [ "$distro" = alpine ]; then
-		expected="$(curl -fsSL "$url.sha512" | awk '{print $1}')"
-	else
-		expected="$(curl -fsSL "$(dirname "$url")/SHA512SUMS" | awk -v f="$(basename "$url")" '$2 == f {print $1}')"
-	fi
-	[ -n "$expected" ] || die "Cannot get the checksum of $url"
+	expected="$(image_checksum "$url")"
 	if [ ! -f "$file" ] || [ "$(sha512sum "$file" | awk '{print $1}')" != "$expected" ]; then
 		log "Download $url"
 		curl -fsSL --retry 3 -o "$file.part" "$url"
@@ -98,6 +108,17 @@ fetch_image() {
 }
 
 url="$(image_url)"
+if [ "$image_key" = 1 ]; then
+	sum="$(image_checksum "$url")"
+	echo "$(basename "$url")-${sum:0:16}"
+	exit 0
+fi
+
+[ -d "$SITE_DIR" ] || die "$SITE_DIR is missing. Run scripts/assemble-site.sh first."
+[ -f "$TOOLS_TARBALL" ] || die "$TOOLS_TARBALL is missing. Run scripts/fetch-upstream.sh tools first."
+rm -rf "$vm"
+mkdir -p "$vm" "$VM_CACHE"
+
 base_image="$(fetch_image "$url")"
 log "Image: $base_image"
 qemu-img create -q -f qcow2 -b "$(readlink -f "$base_image")" -F qcow2 "$vm/disk.qcow2" 12G
@@ -171,6 +192,8 @@ trap "exit 143" INT TERM
 
 ssh_opts=(-i "$vm/id_ed25519" -p "$ssh_port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 	-o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o BatchMode=yes)
+# The arguments are a command for the VM. The VM shell expands them.
+# shellcheck disable=SC2029
 vm_ssh() { ssh "${ssh_opts[@]}" "$vm_user@127.0.0.1" "$@"; }
 vm_root() { vm_ssh "$sudo_cmd" "$@"; }
 vm_copy() { vm_root "tee '$2' >/dev/null" <"$1"; }
