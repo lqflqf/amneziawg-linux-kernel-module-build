@@ -103,8 +103,11 @@ Alpine flavors, releases, and architectures.
 | Installation tests on clean systems | `scripts/test/run-vm-test.sh` |
 | Build, test, and publish workflow | `.github/workflows/build.yml` |
 | Weekly signature of the APT metadata | `.github/workflows/refresh-metadata.yml`, `scripts/refresh-site.sh` |
-| Tracking of upstream and kernel versions, key expiry | `scripts/check-updates.py`, `scripts/check-key-expiry.sh`, `.github/workflows/track-updates.yml` |
+| Tracking of upstream and kernel versions, key expiry | `scripts/check-updates.py`, `scripts/check-key-expiry.sh`, `.github/workflows/track-updates.yml`, `.github/dependabot.yml` |
+| Release inputs and package inputs (one definition) | `scripts/buildlib.py` |
 | Checks of the documents and the version increases | `scripts/lint-docs.py`, `scripts/check-version-bump.py` |
+| Code checks and tests (shellcheck, actionlint, ruff, ty, pytest, bats) | `scripts/lint-code.sh`, `tests/` |
+| Expiry check of the published APT metadata | `scripts/check-metadata-expiry.py` |
 
 See also [manual-setup.md](manual-setup.md), [maintenance.md](maintenance.md), and the
 installation steps in [README.md](../README.md).

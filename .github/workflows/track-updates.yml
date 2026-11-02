@@ -2,7 +2,9 @@ name: Track updates
 
 # Find new upstream versions and new kernel versions. Open or update one pull request
 # that changes versions/. The build workflow tests the pull request. Merge it to publish.
-# Also find APT signing keys that expire soon, and open an issue for them.
+# If the pull request branch already has the same files, do not push. Then the build workflow
+# does not build and test the same files again.
+# Also find APT signing keys and APT metadata that expire soon, and open an issue for them.
 
 on:
   schedule:
@@ -50,7 +52,12 @@ jobs:
           git checkout -B "$BRANCH"
           { echo "Update the version lock files"; echo; cat "$RUNNER_TEMP/summary.md"; } >"$RUNNER_TEMP/message.txt"
           git commit -q -a -F "$RUNNER_TEMP/message.txt"
-          git push --force origin "$BRANCH"
+          if git fetch -q origin "refs/heads/$BRANCH" 2>/dev/null &&
+            [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'FETCH_HEAD^{tree}')" ]; then
+            echo "The branch $BRANCH has the same files. Do not push."
+          else
+            git push --force origin "$BRANCH"
+          fi
           title="Update the AmneziaWG and kernel versions"
           if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
             gh pr edit "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/summary.md"
@@ -67,6 +74,8 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Find keys that expire in fewer than 90 days
         id: expiry
         run: scripts/check-key-expiry.sh 90
@@ -80,5 +89,35 @@ jobs:
           if [ -z "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[].number')" ]; then
             { echo "An APT signing key expires soon:"; echo; sed 's/^/- /' "$REPORT"; echo;
               echo "Do the procedure \"Replace a signing key\" in docs/maintenance.md."; } >"$RUNNER_TEMP/issue.md"
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"
+          fi
+
+  metadata-expiry:
+    name: Check the APT metadata expiry dates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The refresh-metadata workflow signs the metadata again each week. If it fails for
+      # some weeks, the metadata expires and apt stops.
+      - name: Find APT metadata that expires in fewer than 14 days
+        id: metadata
+        run: python3 scripts/check-metadata-expiry.py 14
+      - name: Open an issue
+        if: steps.metadata.outputs.expiring == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.metadata.outputs.report }}
+        run: |
+          title="The APT metadata of the package repository expires soon"
+          if [ -z "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[].number')" ]; then
+            { echo "The APT metadata expires soon:"; echo; sed 's/^/- /' "$REPORT"; echo;
+              echo "Examine the last runs of the refresh-metadata workflow. Correct the problem."
+              echo "Then run the workflow by hand (docs/maintenance.md, \"Retention and history\")."; } >"$RUNNER_TEMP/issue.md"
             gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"
           fi

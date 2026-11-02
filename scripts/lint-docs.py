@@ -2,7 +2,7 @@
 """Check the Markdown files for some ASD-STE100 Simplified Technical English rules.
 
 Usage: scripts/lint-docs.py [file.md ...]
-Without arguments, the script checks README.md, docs/*.md, and keys/*.md.
+Without arguments, the script checks README.md, SECURITY.md, docs/*.md, and keys/*.md.
 
 Errors (exit code 1):
   * Words and phrases that ASD-STE100 does not approve, or that have more than one meaning.
@@ -12,6 +12,8 @@ Warnings:
 The script does not check code blocks, inline code, link targets, or URLs.
 A check by a person is also necessary. This script finds only the frequent problems.
 """
+
+from __future__ import annotations
 
 import glob
 import re
@@ -43,7 +45,7 @@ DENY = {
 MAX_WORDS = 25
 
 
-def clean(text):
+def clean(text: str) -> str:
     text = re.sub(r"```.*?```", "", text, flags=re.S)
     text = re.sub(r"`[^`\n]*`", "CODE", text)
     text = re.sub(r"\]\([^)]*\)", "]", text)
@@ -52,9 +54,9 @@ def clean(text):
     return text
 
 
-def main(files):
+def main(files: list[str]) -> int:
     if not files:
-        files = ["README.md"] + sorted(glob.glob("docs/*.md")) + sorted(glob.glob("keys/*.md"))
+        files = ["README.md", "SECURITY.md"] + sorted(glob.glob("docs/*.md")) + sorted(glob.glob("keys/*.md"))
     errors = warnings = 0
     for path in files:
         with open(path) as f:

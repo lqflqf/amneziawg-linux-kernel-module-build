@@ -77,12 +77,28 @@ jobs:
             elif [ "$EVENT" = push ]; then
               # Compare the release inputs with the published tree, not with the previous commit.
               # Then the next run on main repeats a publish that was canceled or that failed.
+              # Only "HTTP 404" means that the file does not exist. Stop for all other errors.
+              # Then a temporary API error does not start a publish.
               current="$(scripts/release-hash.sh)"
-              if ! gh api "repos/$PACKAGES_REPO" --silent 2>/dev/null; then
+              err="$RUNNER_TEMP/gh-api.err"
+              if ! gh api "repos/$PACKAGES_REPO" --silent 2>"$err"; then
+                if ! grep -q 'HTTP 404' "$err"; then
+                  cat "$err" >&2
+                  echo "::error::Cannot read $PACKAGES_REPO. Start the run again."
+                  exit 1
+                fi
                 echo "::warning::$PACKAGES_REPO does not exist. Do docs/manual-setup.md first. This run does not publish."
               else
-                published="$(gh api "repos/$PACKAGES_REPO/contents/build-info.txt" \
-                  -H 'Accept: application/vnd.github.raw' 2>/dev/null | sed -n 's/^release_inputs_hash=//p' || true)"
+                if info="$(gh api "repos/$PACKAGES_REPO/contents/build-info.txt" \
+                  -H 'Accept: application/vnd.github.raw' 2>"$err")"; then
+                  published="$(sed -n 's/^release_inputs_hash=//p' <<<"$info")"
+                elif grep -q 'HTTP 404' "$err"; then
+                  published=""
+                else
+                  cat "$err" >&2
+                  echo "::error::Cannot read build-info.txt of $PACKAGES_REPO. Start the run again."
+                  exit 1
+                fi
                 echo "Release inputs: $current. Published: ${published:-none}."
                 [ "$current" = "$published" ] || publish=true
               fi
@@ -160,12 +176,46 @@ jobs:
           retention-days: 1
 
   lint:
-    name: Lint and version checks
+    name: Lint, tests, and version checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Install the lint and test tools (pinned versions)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q --require-hashes -r requirements-dev.txt
+          echo "$RUNNER_TEMP/venv/bin" >>"$GITHUB_PATH"
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          echo "$SHELLCHECK_SHA256  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz --strip-components=1 -C "$bin" "shellcheck-v$SHELLCHECK_VERSION/shellcheck"
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz -C "$bin" actionlint
+          echo "$bin" >>"$GITHUB_PATH"
+          sudo apt-get update -q >/dev/null
+          sudo apt-get install -y -q --no-install-recommends bats >/dev/null
+        env:
+          SHELLCHECK_VERSION: 0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      - name: Check the shell scripts (shellcheck)
+        run: scripts/lint-code.sh shellcheck
+      - name: Check the workflows (actionlint)
+        run: scripts/lint-code.sh actionlint
+      - name: Check the Python scripts (ruff, ty)
+        run: scripts/lint-code.sh python
+      - name: Run the tests (pytest, bats)
+        run: scripts/lint-code.sh tests
       - name: Check the documents (ASD-STE100)
         run: python3 scripts/lint-docs.py
       - name: Check keys/FINGERPRINTS.md
@@ -178,7 +228,9 @@ jobs:
           fi
       - name: Check the version increases
         if: github.event_name == 'pull_request'
-        run: python3 scripts/check-version-bump.py "origin/${{ github.base_ref }}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python3 scripts/check-version-bump.py "origin/$BASE_REF"
 
   # If "build" is false, build-apk and build-deb do not run. The jobs that need them
   # (dkms-check, assemble, and the VM tests) then also do not run.
@@ -194,6 +246,8 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.alpine) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: source
@@ -218,12 +272,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: source
           path: out/source
       - name: Build the package (no secrets)
-        run: scripts/container.sh debian-trixie bash -c 'scripts/build-deb.sh'
+        run: |
+          . versions/build.env
+          scripts/container.sh "$DEB_BUILD_IMAGE" bash -c 'scripts/build-deb.sh'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deb
@@ -241,6 +299,8 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.debian) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: deb
@@ -260,6 +320,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: apk-unsigned-*
@@ -323,6 +385,8 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.alpine) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-qemu
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -332,6 +396,13 @@ jobs:
         with:
           name: source
           path: out/source
+      - name: Find the VM image
+        id: image
+        run: echo "key=$(scripts/test/run-vm-test.sh --image-key alpine "${{ matrix.release }}" "${{ matrix.flavor }}" "${{ matrix.arch }}")" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out/vm-cache
+          key: vm-image-alpine-${{ steps.image.outputs.key }}
       - name: Install and test in a VM
         run: scripts/test/run-vm-test.sh alpine "${{ matrix.release }}" "${{ matrix.flavor }}" "${{ matrix.arch }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -351,6 +422,8 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.debian) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-qemu
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -360,6 +433,13 @@ jobs:
         with:
           name: source
           path: out/source
+      - name: Find the VM image
+        id: image
+        run: echo "key=$(scripts/test/run-vm-test.sh --image-key debian "${{ matrix.suite }}" "${{ matrix.arch }}")" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out/vm-cache
+          key: vm-image-debian-${{ steps.image.outputs.key }}
       - name: Install and test in a VM
         run: scripts/test/run-vm-test.sh debian "${{ matrix.suite }}" "${{ matrix.arch }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -404,6 +484,8 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: site

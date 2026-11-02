@@ -151,6 +151,7 @@ EOF
 			awk -F: '/^pub/ {e = $7; p = 1; next} p && /^fpr/ {print $10, (e == "" ? 0 : e); p = 0}' |
 			while read -r fpr expiry; do
 				if [ "$expiry" = 0 ]; then expiry=none; else expiry="$(date -u -d "@$expiry" +%Y-%m-%d)"; fi
+				# shellcheck disable=SC2016 # The backquotes are Markdown code, not a command.
 				printf '| `apt/%s` | `%s` | %s |\n' "$(basename "$f")" "$fpr" "$expiry"
 			done
 	done
@@ -165,6 +166,7 @@ To show the value on your system, run `sha256sum /etc/apk/keys/amneziawg-*.rsa.p
 EOF
 	for f in "$dir"/apk/*.rsa.pub; do
 		[ -f "$f" ] || continue
+		# shellcheck disable=SC2016 # The backquotes are Markdown code, not a command.
 		printf '| `apk/%s` | `%s` |\n' "$(basename "$f")" "$(sha256sum "$f" | cut -d' ' -f1)"
 	done
 	rm -rf "$tmp"

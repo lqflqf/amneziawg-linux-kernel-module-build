@@ -12,12 +12,18 @@
 #                        (keys/apt in this repository) lists them with the same SHA-256.
 #   --release            A package with the same file name as a published package must have the
 #                        same content. If not, stop. Without --release, show a warning.
+#                        Exception: if the package inputs are the same (package-inputs.txt in
+#                        the published tree), only the build tools changed. Then a release keeps
+#                        the published package.
 #                        If the published Debian packages cannot be verified, stop. Without
 #                        --release, show a warning and do not keep them.
 #   --distrust-published Do not keep any published file. Use this only for an emergency key
 #                        change (see docs/maintenance.md).
 # Input : out/apk-unsigned/v<release>/<arch>/*.apk, out/deb/amneziawg-dkms_*.deb
+# Output: <site-dir>, with build-info.txt and package-inputs.txt (input hash of each package,
+#         see scripts/buildlib.py).
 # Environment: APK_KEY_NAME, APK_PRIVATE_KEY, GPG_PRIVATE_KEY, GPG_PASSPHRASE (optional)
+# shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 load_config
 
@@ -63,27 +69,59 @@ log "Build the keyring packages"
 
 rm -rf "${site:?}"/* "$site/.nojekyll"
 
+# Input hashes of the published packages (scripts/buildlib.py). Old trees do not have the file.
+declare -A published_inputs=()
+if [ -n "$published" ] && [ -f "$published/package-inputs.txt" ]; then
+	while read -r path hash; do
+		published_inputs["$path"]="$hash"
+	done <"$published/package-inputs.txt"
+fi
+inputs_file="$site/package-inputs.txt"
+: >"$inputs_file"
+
+# Decide if the published package with the same file name stays.
+# Usage: keep_published <relative-path> <same content: yes|no> <input hash> <version field>
+# Returns 0 if the release keeps the published package. Returns 1 to use the new package.
+keep_published() {
+	local path="$1" same="$2" inputs="$3" field="$4"
+	case "$(published_action "$same" "${published_inputs[$path]:-}" "$inputs")" in
+	same) [ "$release" = 1 ] ;;
+	rebuilt)
+		if [ "$release" = 1 ]; then
+			warn "$path: the build tools changed, but the package inputs did not change. Keep the published package."
+			return 0
+		fi
+		log "$path: the build tools changed, but the package inputs did not change. A release keeps the published package."
+		return 1
+		;;
+	*)
+		mismatch "$path: the new build is different from the published package with the same version." \
+			"Increase $field."
+		return 1
+		;;
+	esac
+}
+
 # ---------------------------------------------------------------- Alpine
 # The tree contains only the current packages of the targets in versions/targets.json.
-# Usage: add_apk <file> <relative-dir> <compare: yes|no> <version field>
+# Usage: add_apk <file> <relative-dir> <compare: yes|no> <version field> <input hash>
 add_apk() {
-	local file="$1" dir="$2" compare="$3" field="$4" name old
+	local file="$1" dir="$2" compare="$3" field="$4" inputs="$5" name old same=no
 	name="$(basename "$file")"
 	mkdir -p "$site/$dir"
+	echo "$dir/$name $inputs" >>"$inputs_file"
 	old="${published:+$published/$dir/$name}"
 	if [ -n "$old" ] && [ -f "$old" ] && [ "$compare" = yes ]; then
 		if [ "$(python3 "$ROOT_DIR/scripts/apk-tool.py" content-hash "$old")" = \
 			"$(python3 "$ROOT_DIR/scripts/apk-tool.py" content-hash "$file")" ]; then
-			if [ "$release" = 1 ]; then
-				# Keep the published file. Then the checksums that users have do not change.
-				python3 "$ROOT_DIR/scripts/apk-tool.py" verify "$old" "$ROOT_DIR/keys/apk" >/dev/null ||
-					die "$dir/$name in the published tree has no valid signature of a key in keys/apk"
-				cp "$old" "$site/$dir/$name"
-				return
-			fi
-		else
-			mismatch "$dir/$name: the new build is different from the published package with the same version." \
-				"Increase $field."
+			same=yes
+		fi
+		if keep_published "$dir/$name" "$same" "$inputs" "$field"; then
+			# Keep the published file. Then the checksums that users have do not change.
+			python3 "$ROOT_DIR/scripts/apk-tool.py" verify "$old" "$ROOT_DIR/keys/apk" >/dev/null ||
+				die "$dir/$name in the published tree has no valid signature of a key in keys/apk"
+			cp "$old" "$site/$dir/$name"
+			return
 		fi
 	fi
 	cp "$file" "$site/$dir/$name"
@@ -91,15 +129,19 @@ add_apk() {
 
 compare_keys=no
 [ "$release" = 1 ] && compare_keys=yes
-keys_apk="$(ls "$OUT_DIR"/keyring/apk/amneziawg-keys-*.apk)"
+keys_apk="$OUT_DIR/keyring/apk/amneziawg-keys-$KEYS_VERSION-r0.apk"
+[ -f "$keys_apk" ] || die "$keys_apk is missing"
+keys_inputs="$(python3 "$ROOT_DIR/scripts/buildlib.py" input-hash keys)"
 while read -r rel flavor arch kver; do
 	pkgrel="$(alpine_pkgrel "$rel" "$flavor" "$arch")"
 	file="$OUT_DIR/apk/v$rel/$arch/amneziawg-$flavor-$kver-r$pkgrel.apk"
 	[ -f "$file" ] || die "$file is missing"
-	add_apk "$file" "alpine/v$rel/main/$arch" yes "the \"rebuild\" counter in versions/targets.json"
+	add_apk "$file" "alpine/v$rel/main/$arch" yes "the \"rebuild\" counter in versions/targets.json" \
+		"$(python3 "$ROOT_DIR/scripts/buildlib.py" input-hash apk "$rel" "$flavor" "$arch")"
 	# The keyring package is the same for all releases and architectures. In a test run it has
 	# the temporary keys, thus it is not compared with the published package.
-	add_apk "$keys_apk" "alpine/v$rel/main/$arch" "$compare_keys" "KEYS_VERSION in versions/build.env"
+	add_apk "$keys_apk" "alpine/v$rel/main/$arch" "$compare_keys" "KEYS_VERSION in versions/build.env" \
+		"$keys_inputs"
 done < <(jq -r '.alpine[] | "\(.release) \(.flavor) \(.arch) \(.kver)"' "$TARGETS_FILE")
 
 # ---------------------------------------------------------------- Debian
@@ -124,28 +166,38 @@ if [ -n "$published" ] && [ -d "$published/debian/dists" ]; then
 	fi
 fi
 
-# Usage: add_deb <file> <package> <compare: yes|no>
+# The pool already contains the verified published packages.
+# Usage: add_deb <file> <package> <compare: yes|no> <version field> <input hash>
 add_deb() {
-	local file="$1" pkg="$2" compare="$3" dest
-	dest="$pool/$pkg/$(basename "$file")"
+	local file="$1" pkg="$2" compare="$3" field="$4" inputs="$5" dest path same=no
+	path="debian/pool/main/a/$pkg/$(basename "$file")"
+	dest="$site/$path"
 	mkdir -p "$(dirname "$dest")"
-	if [ -f "$dest" ] && [ "$compare" = yes ] && ! cmp -s "$file" "$dest"; then
-		mismatch "$(basename "$file"): the new build is different from the published package with the same version." \
-			"Increase DEB_REVISION (or KEYS_VERSION) in versions/."
+	echo "$path $inputs" >>"$inputs_file"
+	if [ -f "$dest" ] && [ "$compare" = yes ]; then
+		cmp -s "$file" "$dest" && same=yes
+		keep_published "$path" "$same" "$inputs" "$field" && return
 	fi
 	cp "$file" "$dest"
 }
 
 deb="$OUT_DIR/deb/amneziawg-dkms_${DEB_VERSION}_all.deb"
 [ -f "$deb" ] || die "$deb is missing"
-add_deb "$deb" amneziawg-dkms yes
-add_deb "$(ls "$OUT_DIR"/keyring/deb/amneziawg-archive-keyring_*_all.deb)" amneziawg-archive-keyring "$compare_keys"
+add_deb "$deb" amneziawg-dkms yes "DEB_REVISION in versions/upstream.env" \
+	"$(python3 "$ROOT_DIR/scripts/buildlib.py" input-hash deb)"
+keys_deb="$OUT_DIR/keyring/deb/amneziawg-archive-keyring_${KEYS_VERSION}_all.deb"
+[ -f "$keys_deb" ] || die "$keys_deb is missing"
+add_deb "$keys_deb" amneziawg-archive-keyring "$compare_keys" "KEYS_VERSION in versions/build.env" "$keys_inputs"
+LC_ALL=C sort -o "$inputs_file" "$inputs_file"
 
-# Retention: keep the newest DEB_KEEP_VERSIONS versions of each package.
+# Retention: keep the newest DEB_KEEP_VERSIONS versions of each package (Debian version order).
 for dir in "$pool"/*/; do
 	pkg="$(basename "$dir")"
-	mapfile -t old < <(find "$dir" -name "${pkg}_*_all.deb" -printf '%f\n' |
-		sed -E "s/^${pkg}_(.*)_all\.deb$/\1/" | sort -V -r | tail -n +"$((DEB_KEEP_VERSIONS + 1))")
+	mapfile -t versions < <(find "$dir" -name "${pkg}_*_all.deb" -printf '%f\n' |
+		sed -E "s/^${pkg}_(.*)_all\.deb$/\1/")
+	[ "${#versions[@]}" -gt 0 ] || continue
+	mapfile -t old < <(python3 "$ROOT_DIR/scripts/buildlib.py" newest-first "${versions[@]}" |
+		tail -n +"$((DEB_KEEP_VERSIONS + 1))")
 	for version in "${old[@]}"; do
 		log "Remove old $pkg $version"
 		rm -f "$dir/${pkg}_${version}_all.deb"
@@ -156,6 +208,7 @@ done
 "$ROOT_DIR/scripts/keys.sh" export-public "$trusted" "$site/keys"
 
 log "Make the Alpine indexes (offline signer container)"
+# shellcheck disable=SC2016 # The container expands the arguments.
 "$ROOT_DIR/scripts/container.sh" -e APK_KEY_NAME -e APK_PRIVATE_KEY signer \
 	bash -c 'scripts/repo-alpine.sh "$1" && chmod -R a+rwX "$1/alpine"' sh "$site_in_container"
 

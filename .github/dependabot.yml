@@ -1,0 +1,21 @@
+# Dependabot opens pull requests for new versions of:
+#   - the actions in the workflows (pinned to a commit SHA),
+#   - the lint and test tools in requirements-dev.txt (pinned with hashes).
+# scripts/check-updates.py (track-updates workflow) updates the upstream and kernel versions.
+# Update the container images and DEBIAN_SNAPSHOT by hand (docs/maintenance.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      lint-tools:
+        patterns: ["*"]

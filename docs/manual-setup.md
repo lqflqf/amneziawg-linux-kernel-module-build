@@ -349,6 +349,18 @@ select it.
 After these runs, the workflows run automatically: `track-updates` each day, and
 `refresh-metadata` each week.
 
+## Step 14: Turn on the private security reports
+
+`SECURITY.md` tells persons to report security problems with the private report function of
+GitHub. Turn on this function:
+
+```sh
+gh api -X PUT repos/lqflqf/amneziawg-linux-kernel-module-build/private-vulnerability-reporting
+```
+
+You can also use the web page: **Settings** > **Advanced Security** >
+**Private vulnerability reporting** > **Enable**.
+
 ## Safety rules
 
 - Never commit a private key to a repository.
@@ -358,6 +370,8 @@ After these runs, the workflows run automatically: `track-updates` each day, and
   procedure in [maintenance.md](maintenance.md#replace-a-signing-key).
 - The `track-updates` workflow opens an issue 90 days before the APT key expires.
   Replace the key before it expires.
+- The `track-updates` workflow also opens an issue 14 days before the published APT metadata
+  expires. Then the `refresh-metadata` workflow failed for some weeks. Correct the problem.
 
 ## Summary of the secrets
 

@@ -11,15 +11,18 @@ Usage:
   apk-tool.py pkginfo <apk>          Print .PKGINFO.
 """
 
+from __future__ import annotations
+
 import hashlib
 import os
 import subprocess
 import sys
 import tempfile
 import zlib
+from collections.abc import Callable
 
 
-def gzip_members(data):
+def gzip_members(data: bytes) -> list[tuple[bytes, bytes]]:
     """Return a list of (compressed bytes, uncompressed bytes) for each gzip stream."""
     members = []
     pos = 0
@@ -34,7 +37,7 @@ def gzip_members(data):
     return members
 
 
-def tar_entries(raw):
+def tar_entries(raw: bytes) -> list[tuple[str, bytes]]:
     """Return (name, content) for each file in a tar stream (end blocks are optional)."""
     entries = []
     pos = 0
@@ -53,7 +56,7 @@ def tar_entries(raw):
     return entries
 
 
-def parse(path):
+def parse(path: str) -> tuple[list[tuple[str, bytes]] | None, bytes, bytes, bytes]:
     """Return (signature entries or None, control bytes, data bytes, control raw tar)."""
     with open(path, "rb") as f:
         members = gzip_members(f.read())
@@ -66,7 +69,7 @@ def parse(path):
     return signature, members[0][0], members[1][0], members[0][1]
 
 
-def cmd_split(apk, outdir):
+def cmd_split(apk: str, outdir: str) -> None:
     _, control, data, _ = parse(apk)
     os.makedirs(outdir, exist_ok=True)
     with open(os.path.join(outdir, "control.tar.gz"), "wb") as f:
@@ -75,12 +78,12 @@ def cmd_split(apk, outdir):
         f.write(data)
 
 
-def cmd_content_hash(apk):
+def cmd_content_hash(apk: str) -> None:
     _, control, data, _ = parse(apk)
     print(hashlib.sha256(control + data).hexdigest())
 
 
-def cmd_verify(apk, keydir):
+def cmd_verify(apk: str, keydir: str) -> None:
     signature, control, _, _ = parse(apk)
     if not signature:
         raise SystemExit(f"{apk}: no signature")
@@ -111,7 +114,7 @@ def cmd_verify(apk, keydir):
     print(f"{apk}: signature OK ({key})")
 
 
-def cmd_pkginfo(apk):
+def cmd_pkginfo(apk: str) -> None:
     _, _, _, control_raw = parse(apk)
     for name, content in tar_entries(control_raw):
         if name == ".PKGINFO":
@@ -120,8 +123,8 @@ def cmd_pkginfo(apk):
     raise SystemExit(f"{apk}: no .PKGINFO")
 
 
-def main(argv):
-    commands = {
+def main(argv: list[str]) -> None:
+    commands: dict[str, tuple[Callable[..., None], int]] = {
         "split": (cmd_split, 2),
         "content-hash": (cmd_content_hash, 1),
         "verify": (cmd_verify, 2),

@@ -1,0 +1,6 @@
+# Settings for shellcheck (scripts/lint-code.sh).
+# Follow the files that the scripts read with "." relative to the script directory.
+source-path=SCRIPTDIR
+external-sources=true
+# Show all messages, also the "style" messages.
+severity=style

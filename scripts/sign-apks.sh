@@ -27,6 +27,7 @@ for apk in "${apks[@]}"; do
 done
 
 log "Sign ${#apks[@]} packages with $APK_KEY_NAME (offline container)"
+# shellcheck disable=SC2016 # The container expands the variables.
 "$ROOT_DIR/scripts/container.sh" -e APK_KEY_NAME -e APK_PRIVATE_KEY signer bash -c '
 	set -e
 	scripts/keys.sh apk-setup >/dev/null
