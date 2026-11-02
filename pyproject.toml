@@ -1,0 +1,22 @@
+# Settings of the Python checks (scripts/lint-code.sh). This repository is not a Python package.
+# The scripts run with the Python 3 of the GitHub runner (ubuntu-24.04: Python 3.12).
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+extend-exclude = ["out", "work"]
+
+[tool.ruff.lint]
+# E, F: pycodestyle and pyflakes (errors). B: flake8-bugbear (frequent bugs).
+select = ["E", "F", "B"]
+
+[tool.ty.environment]
+python-version = "3.12"
+# The scripts import scripts/buildlib.py. The tests import the scripts.
+extra-paths = ["scripts"]
+
+[tool.ty.src]
+exclude = ["out", "work"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

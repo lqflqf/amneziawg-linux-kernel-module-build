@@ -13,21 +13,25 @@ Files in the pool that no signed index lists are not in the output (a warning is
 The script stops with an error if a signature or a hash is not correct.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
+from typing import NoReturn
 
 ALLOWED_PACKAGES = {"amneziawg-dkms", "amneziawg-archive-keyring"}
 
 
-def fail(msg):
+def fail(msg: str) -> NoReturn:
     sys.exit(f"ERROR: {msg}")
 
 
-def sha256(path):
+def sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -35,9 +39,9 @@ def sha256(path):
     return h.hexdigest()
 
 
-def paragraphs(text):
+def paragraphs(text: str) -> Iterator[dict[str, str]]:
     for block in text.split("\n\n"):
-        fields = {}
+        fields: dict[str, str] = {}
         key = None
         for line in block.splitlines():
             if line.startswith((" ", "\t")) and key:
@@ -49,7 +53,7 @@ def paragraphs(text):
             yield fields
 
 
-def make_keyring(trusted_dir, out):
+def make_keyring(trusted_dir: str, out: str) -> None:
     files = sorted(
         os.path.join(trusted_dir, "apt", f)
         for f in os.listdir(os.path.join(trusted_dir, "apt"))
@@ -64,7 +68,7 @@ def make_keyring(trusted_dir, out):
                                              capture_output=True).stdout)
 
 
-def verified_release(inrelease, keyring):
+def verified_release(inrelease: str, keyring: str) -> str:
     """Return the text of InRelease after gpgv verified it."""
     result = subprocess.run(
         ["gpgv", "--keyring", keyring, "--output", "-", inrelease], capture_output=True
@@ -75,11 +79,11 @@ def verified_release(inrelease, keyring):
     return result.stdout.decode()
 
 
-def main():
+def main() -> None:
     if len(sys.argv) != 4:
         sys.exit(__doc__)
     repo, trusted_dir, output = sys.argv[1:]
-    verified = {}
+    verified: dict[str, dict[str, str | None]] = {}
     dists = os.path.join(repo, "dists")
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -91,7 +95,7 @@ def main():
             if not os.path.isfile(inrelease):
                 fail(f"{inrelease} is missing")
             release = next(paragraphs(verified_release(inrelease, keyring)))
-            hashes = {}
+            hashes: dict[str, tuple[str, int]] = {}
             for line in release.get("SHA256", "").splitlines():
                 parts = line.split()
                 if len(parts) == 3:
@@ -131,7 +135,7 @@ def main():
                 print(f"WARNING: {rel} is not in a signed index. It is not kept.", file=sys.stderr)
 
     with open(output, "w") as f:
-        json.dump(sorted(verified.values(), key=lambda e: e["path"]), f, indent=1)
+        json.dump([verified[path] for path in sorted(verified)], f, indent=1)
     print(f"Verified {len(verified)} files in {repo}", file=sys.stderr)
 
 
