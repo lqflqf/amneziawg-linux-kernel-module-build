@@ -1,9 +1,9 @@
 {
   "alpine": [
-    {"release": "3.24", "flavor": "virt", "arch": "x86_64", "kver": "6.18.60", "krel": 0, "rebuild": 2},
-    {"release": "3.24", "flavor": "virt", "arch": "aarch64", "kver": "6.18.60", "krel": 0, "rebuild": 2},
-    {"release": "3.24", "flavor": "lts", "arch": "x86_64", "kver": "6.18.60", "krel": 0, "rebuild": 2},
-    {"release": "3.24", "flavor": "lts", "arch": "aarch64", "kver": "6.18.60", "krel": 0, "rebuild": 2},
+    {"release": "3.24", "flavor": "virt", "arch": "x86_64", "kver": "6.18.62", "krel": 0, "rebuild": 0},
+    {"release": "3.24", "flavor": "virt", "arch": "aarch64", "kver": "6.18.62", "krel": 0, "rebuild": 0},
+    {"release": "3.24", "flavor": "lts", "arch": "x86_64", "kver": "6.18.62", "krel": 0, "rebuild": 0},
+    {"release": "3.24", "flavor": "lts", "arch": "aarch64", "kver": "6.18.62", "krel": 0, "rebuild": 0},
     {"release": "3.23", "flavor": "virt", "arch": "x86_64", "kver": "6.18.60", "krel": 0, "rebuild": 2},
     {"release": "3.23", "flavor": "virt", "arch": "aarch64", "kver": "6.18.60", "krel": 0, "rebuild": 2},
     {"release": "3.23", "flavor": "lts", "arch": "x86_64", "kver": "6.18.60", "krel": 0, "rebuild": 2},
