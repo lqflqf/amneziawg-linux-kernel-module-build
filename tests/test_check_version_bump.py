@@ -84,6 +84,9 @@ def test_unknown_release_input_needs_all_versions(repo: Repo) -> None:
 
 
 def test_version_cannot_decrease(repo: Repo) -> None:
+    # Make sure that the base "rebuild" counter is not 0. A negative counter is not a valid version.
+    bump_rebuild(repo)
+    repo.commit()
     path = repo.path / "versions/targets.json"
     targets = json.loads(path.read_text())
     targets["alpine"][0]["rebuild"] -= 1
